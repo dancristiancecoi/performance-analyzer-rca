@@ -404,4 +404,37 @@ public class PerformanceAnalyzerWebServerTest {
                     "Received unexpected error in testThatClientRejectsUntrustedServer", e);
         }
     }
+
+    @Test
+    public void testPKCS1Certs() {
+        ClassLoader classLoader = getClass().getClassLoader();
+        PluginSettings.instance()
+                .overrideProperty(
+                        CertificateUtils.TRUSTED_CAS_FILE_PATH,
+                        Objects.requireNonNull(
+                                        classLoader.getResource("tls/rootca/rootca-pkcs1.pem"))
+                                .getFile());
+        PluginSettings.instance()
+                .overrideProperty(
+                        CertificateUtils.CLIENT_TRUSTED_CAS_FILE_PATH,
+                        Objects.requireNonNull(
+                                        classLoader.getResource("tls/rootca/rootca-pkcs1.pem"))
+                                .getFile());
+
+        initializeServer(true);
+
+        try {
+            verifyHttpsRequest(
+                    String.format("https://%s:%s/test", BIND_HOST, PORT),
+                    "tls/client/localhost-pkcs1.crt",
+                    "tls/client/localhost-pkcs1.key",
+                    "tls/rootca/rootca-pkcs1.pem");
+            throw new AssertionError("The client accepted a response from an untrusted server");
+        } catch (SSLException e) { // Unauthenticated server is rejected!
+            assert true;
+        } catch (Exception e) { // Treat unexpected errors as a failure
+            throw new AssertionError(
+                    "Received unexpected error in testThatClientRejectsUntrustedServer", e);
+        }
+    }
 }

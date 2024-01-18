@@ -6,23 +6,27 @@
 package org.opensearch.performanceanalyzer;
 
 
-import java.io.File;
-import java.io.FileReader;
-import java.security.KeyStore;
-import java.security.PrivateKey;
+import java.io.*;
+import java.security.*;
 import java.security.cert.Certificate;
 import java.security.cert.X509Certificate;
+import java.security.spec.EncodedKeySpec;
+import java.security.spec.InvalidKeySpecException;
+import java.security.spec.PKCS8EncodedKeySpec;
+import java.util.Arrays;
+import java.util.List;
 import javax.annotation.Nullable;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.TrustManagerFactory;
 import javax.net.ssl.X509TrustManager;
+import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.bouncycastle.asn1.pkcs.PrivateKeyInfo;
 import org.bouncycastle.cert.X509CertificateHolder;
 import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter;
-import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.bouncycastle.openssl.PEMParser;
+import org.bouncycastle.util.io.pem.PemObject;
+import org.bouncycastle.util.io.pem.PemReader;
 import org.opensearch.performanceanalyzer.commons.config.PluginSettings;
 
 public class CertificateUtils {
@@ -53,11 +57,39 @@ public class CertificateUtils {
         }
     }
 
-    public static PrivateKey getPrivateKey(final FileReader keyReader) throws Exception {
-        try (PEMParser pemParser = new PEMParser(keyReader)) {
-            PrivateKeyInfo pki = (PrivateKeyInfo) pemParser.readObject();
-            return BouncyCastleProvider.getPrivateKey(pki);
+    public static byte[] readPrivateKey(String keyFilePath) throws KeyException {
+        try (FileReader in = new FileReader(keyFilePath)) {
+            try (PemReader pemReader = new PemReader(in)) {
+                PemObject pemObject = pemReader.readPemObject();
+                if (pemObject == null) {
+                    throw new KeyException("could not read the private key");
+                }
+                return pemObject.getContent();
+            }
+
+        } catch (IOException e) {
+            throw new KeyException("could not read the private key", e);
         }
+    }
+
+    public static PrivateKey generatePrivateKey(EncodedKeySpec encodedKeySpec)
+            throws InvalidKeySpecException {
+        List<String> algorithms = Arrays.asList("RSA", "DSA", "EC");
+        PrivateKey privateKey = null;
+        for (String algorithm : algorithms) {
+            try {
+                privateKey = KeyFactory.getInstance(algorithm).generatePrivate(encodedKeySpec);
+                break;
+            } catch (InvalidKeySpecException | NoSuchAlgorithmException ignored) {
+                // try the next algorithm
+                LOGGER.log(
+                        Level.INFO, "Failed to generate private key with algorithm: " + algorithm);
+            }
+        }
+        if (privateKey == null) {
+            throw new InvalidKeySpecException("Neither RSA, DSA nor EC worked");
+        }
+        return privateKey;
     }
 
     public static KeyStore createKeyStore() throws Exception {
@@ -65,12 +97,14 @@ public class CertificateUtils {
         String keyFilePath = PluginSettings.instance().getSettingValue(PRIVATE_KEY_FILE_PATH);
         KeyStore.ProtectionParameter protParam =
                 new KeyStore.PasswordProtection(CertificateUtils.IN_MEMORY_PWD.toCharArray());
-        PrivateKey pk = getPrivateKey(new FileReader(keyFilePath));
+        byte[] fileByte = readPrivateKey(keyFilePath);
+        PKCS8EncodedKeySpec encodedKeySpec = new PKCS8EncodedKeySpec(fileByte);
+        PrivateKey privateKey = generatePrivateKey(encodedKeySpec);
         KeyStore ks = createEmptyStore();
         Certificate certificate = getCertificate(new FileReader(certFilePath));
         ks.setEntry(
                 ALIAS_IDENTITY,
-                new KeyStore.PrivateKeyEntry(pk, new Certificate[] {certificate}),
+                new KeyStore.PrivateKeyEntry(privateKey, new Certificate[] {certificate}),
                 protParam);
         return ks;
     }
